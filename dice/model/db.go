@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"os"
 	"sync"
 
@@ -32,10 +33,15 @@ func initEngine() {
 		log.Warn("未配置数据库类型，默认使用: SQLITE数据库")
 		engine = &SQLiteEngine{}
 	}
-
-	errEngineInstance = engine.Init()
+	// TODO: 使用统一管理的context，以确保在程序关闭时，可以正确销毁数据库的context从而优雅退出
+	errEngineInstance = engine.Init(context.Background())
 	if errEngineInstance != nil {
 		log.Error("数据库引擎初始化失败:", errEngineInstance)
+	}
+	err := hackMigrator(engine.GetLogDB(WRITE))
+	if err != nil {
+		log.Errorf("数据库引擎初始化失败: %v", err)
+		return
 	}
 }
 
@@ -45,22 +51,12 @@ func getEngine() (DatabaseOperator, error) {
 	return engine, errEngineInstance
 }
 
-// DatabaseInit 初始化数据和日志数据库
-func DatabaseInit() (dataDB *gorm.DB, logsDB *gorm.DB, err error) {
-	engine, err = getEngine()
-	if err != nil {
-		return nil, nil, err
-	}
+// GetDatabaseOperator 初始化数据和日志数据库
+func GetDatabaseOperator() (DatabaseOperator, error) {
+	return getEngine()
+}
 
-	dataDB, err = engine.DataDBInit()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	logsDB, err = engine.LogDBInit()
-	if err != nil {
-		return nil, nil, err
-	}
+func hackMigrator(logsDB *gorm.DB) error {
 	// TODO: 将这段逻辑挪移到Migrator上
 	var ids []uint64
 	var logItemSums []struct {
@@ -70,7 +66,7 @@ func DatabaseInit() (dataDB *gorm.DB, logsDB *gorm.DB, err error) {
 	logsDB.Model(&LogInfo{}).Where("size IS NULL").Pluck("id", &ids)
 	if len(ids) > 0 {
 		// 根据 LogInfo 表中的 IDs 查找对应的 LogOneItem 记录
-		err = logsDB.Model(&LogOneItem{}).
+		err := logsDB.Model(&LogOneItem{}).
 			Where("log_id IN ?", ids).
 			Group("log_id").
 			Select("log_id, COUNT(*) AS count"). // 如果需要求和其他字段，可以使用 Sum
@@ -78,7 +74,7 @@ func DatabaseInit() (dataDB *gorm.DB, logsDB *gorm.DB, err error) {
 		if err != nil {
 			// 错误处理
 			log.Infof("Error querying LogOneItem: %v", err)
-			return nil, nil, err
+			return err
 		}
 
 		// 2. 更新 LogInfo 表的 Size 字段
@@ -90,11 +86,11 @@ func DatabaseInit() (dataDB *gorm.DB, logsDB *gorm.DB, err error) {
 			if err != nil {
 				// 错误处理
 				log.Errorf("Error updating LogInfo: %v", err)
-				return nil, nil, err
+				return err
 			}
 		}
 	}
-	return dataDB, logsDB, nil
+	return nil
 }
 
 // DBCheck 检查数据库状态
@@ -104,16 +100,5 @@ func DBCheck() {
 		log.Error("数据库引擎获取失败:", err)
 		return
 	}
-
 	dbEngine.DBCheck()
-}
-
-// CensorDBInit 初始化敏感词数据库
-func CensorDBInit() (censorDB *gorm.DB, err error) {
-	censorEngine, err := getEngine()
-	if err != nil {
-		return nil, err
-	}
-
-	return censorEngine.CensorDBInit()
 }

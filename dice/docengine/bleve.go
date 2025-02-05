@@ -58,7 +58,11 @@ func (d *BleveSearchEngine) Init() error {
 	docMapping := bleve.NewDocumentMapping()
 	contentFieldMapping := bleve.NewTextFieldMapping()
 	keywordMapping := bleve.NewKeywordFieldMapping()
-	// 注意： 这里group,from,title，package都是keywordMapping，这样就能进行精确搜索。
+	// 注意： 这里group,from,package都是keywordMapping
+	// 琢磨了一下，title还要做分词匹配，这个不能是keywordMapping
+	// 下面这些GPT说的，如果不对，随便改。
+	// 不需要分词，只需要支持模糊匹配（类似 SQL 中的 LIKE），那么 keyword 类型的字段 是最合适的选择。
+	// keyword 类型的字段会将整个字段值作为一个整体存储，适合精确匹配和通配符匹配（如 NewWildcardQuery）。
 	docMapping.AddFieldMappingsAt("group", keywordMapping)
 	docMapping.AddFieldMappingsAt("from", keywordMapping)
 	docMapping.AddFieldMappingsAt("title", contentFieldMapping)
@@ -120,7 +124,6 @@ func (d *BleveSearchEngine) AddItem(item HelpTextItem) (string, error) {
 // AddItemApply 这里认为是真正执行插入文档的逻辑
 // 由于现在已经将执行函数改为了可按文件执行，所以可以按文件进行Apply，这应当不会有太大的量级。
 // end代表是否是最后一次执行，一般用在所有的数据都处理完之后，关闭逻辑的时候使用，如bleve batch重复利用后最后销毁
-// TODO: 似乎很奇怪，这家伙貌似不会回收内存的吗？
 func (d *BleveSearchEngine) AddItemApply(end bool) error {
 	if d.batch != nil {
 		// 执行batch
@@ -130,11 +133,10 @@ func (d *BleveSearchEngine) AddItemApply(end bool) error {
 		}
 		// 如果是最后一批
 		if end {
-			// 销毁batch
 			d.batch.Reset()
 			d.batch = nil
 		} else {
-			// 否则重置batch
+			// 否则仅重置batch
 			d.batch.Reset()
 		}
 		return err
@@ -209,17 +211,17 @@ func (d *BleveSearchEngine) PaginateDocuments(pageSize, pageNum int, group, from
 	// 只有Keyword才支持NewTermQuery
 	conjunctionQuery := bleve.NewConjunctionQuery()
 	if group != "" {
-		groupQuery := bleve.NewTermQuery(group)
+		groupQuery := bleve.NewWildcardQuery(fmt.Sprintf("*%s*", group))
 		groupQuery.SetField("group")
 		conjunctionQuery.AddQuery(groupQuery)
 	}
 	if from != "" {
-		fromQuery := bleve.NewTermQuery(from)
+		fromQuery := bleve.NewWildcardQuery(fmt.Sprintf("*%s*", from))
 		fromQuery.SetField("from")
 		conjunctionQuery.AddQuery(fromQuery)
 	}
 	if title != "" {
-		titleQuery := bleve.NewTermQuery(title)
+		titleQuery := bleve.NewWildcardQuery(fmt.Sprintf("*%s*", title))
 		titleQuery.SetField("title")
 		conjunctionQuery.AddQuery(titleQuery)
 	}
