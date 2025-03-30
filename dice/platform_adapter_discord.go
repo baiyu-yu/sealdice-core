@@ -98,11 +98,11 @@ func (pa *PlatformAdapterDiscord) Serve() int {
 		if m.Author.Bot || m.Author.System {
 			return
 		}
-		msg, errConv := pa.toStdMessage(m)
-		if errConv != nil {
-			return
-		}
-		pa.Session.Execute(pa.EndPoint, msg, false)
+		//msg, errConv := pa.toStdMessage(m)
+		//if errConv != nil {
+		//	return
+		//}
+		//pa.Session.Execute(pa.EndPoint, msg, false)
 	})
 	dg.AddHandler(func(s *discordgo.Session, m *discordgo.MessageDelete) {
 		ch, errChannel := pa.IntentSession.Channel(m.ChannelID)
