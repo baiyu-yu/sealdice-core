@@ -62,18 +62,6 @@ var dndAttrParent = map[string]string{
 
 const NULL_INIT_VAL = math.MaxInt32 // 不使用 MAX_INT64 以保证 JS 环境使用时不会出现潜在问题
 
-func setupConfigDND(_ *Dice) AttributeConfigs {
-	// 如果不存在，新建
-	defaultVals := AttributeConfigs{
-		Alias: map[string][]string{},
-		Order: AttributeOrder{
-			Top:    []string{"力量", "敏捷", "体质", "体型", "魅力", "智力", "感知", "hp", "ac", "熟练"},
-			Others: AttributeOrderOthers{SortBy: "Name"},
-		},
-	}
-	return defaultVals
-}
-
 func getPlayerNameTempFunc(mctx *MsgContext) string {
 	if mctx.Dice.Config.PlayerNameWrapEnable {
 		return fmt.Sprintf("<%s>", mctx.Player.Name)
@@ -95,8 +83,6 @@ func stpFormat(attrName string) string {
 }
 
 func RegisterBuiltinExtDnd5e(self *Dice) {
-	ac := setupConfigDND(self)
-
 	deathSavingStable := func(ctx *MsgContext) {
 		VarDelValue(ctx, "DSS")
 		VarDelValue(ctx, "DSF")
@@ -243,7 +229,7 @@ func RegisterBuiltinExtDnd5e(self *Dice) {
 		ToMod: func(ctx *MsgContext, args *CmdArgs, i *stSetOrModInfoItem, attrs *AttributesItem, tmpl *GameSystemTemplate) bool {
 			over := args.GetKwarg("over")
 			attrName := tmpl.GetAlias(i.name)
-			if attrName == "hp" && over != nil {
+			if attrName == "hp" && over == nil {
 				hpBuff := attrs.Load("$buff_hp")
 				if hpBuff == nil {
 					hpBuff = ds.NewIntVal(0)
@@ -417,7 +403,7 @@ func RegisterBuiltinExtDnd5e(self *Dice) {
 			// 获取代骰
 			mctx := GetCtxProxyFirst(ctx, cmdArgs)
 			mctx.DelegateText = ctx.DelegateText
-			mctx.Player.TempValueAlias = &ac.Alias
+			mctx.Player.TempValueAlias = &_dnd5eTmpl.Alias
 			// 参数确认
 			val := cmdArgs.GetArgN(1)
 			switch val {
@@ -434,8 +420,6 @@ func RegisterBuiltinExtDnd5e(self *Dice) {
 					m = strings.Replace(m, "劣勢", "劣势", 1)
 					restText = strings.TrimSpace(restText[len(m):])
 				}
-				// 准备要处理的函数
-				expr := fmt.Sprintf("d20%s + %s", m, restText)
 				// 初始化VM
 				mctx.CreateVmIfNotExists()
 				// 获取角色模板
@@ -449,7 +433,7 @@ func RegisterBuiltinExtDnd5e(self *Dice) {
 				}
 				// 从COC复制来的轮数检查，同时特判一次的情况，防止完全骰不出去点
 				if cmdArgs.SpecialExecuteTimes > int(ctx.Dice.Config.MaxExecuteTime) && cmdArgs.SpecialExecuteTimes != 1 {
-					VarSetValueStr(ctx, "$t次数", strconv.Itoa(cmdArgs.SpecialExecuteTimes))
+					VarSetValueStr(mctx, "$t次数", strconv.Itoa(cmdArgs.SpecialExecuteTimes))
 					ReplyToSender(mctx, msg, DiceFormatTmpl(mctx, "DND:检定_轮数过多警告"))
 					return CmdExecuteResult{Matched: true, Solved: true}
 				}
@@ -468,43 +452,68 @@ func RegisterBuiltinExtDnd5e(self *Dice) {
 					mctx.Eval(tmpl.PreloadCode, nil)
 					// 为rc设定属性豁免
 					mctx.setDndReadForVM(true)
+					// 准备要处理的函数，为了能够读取到 d20 的出目，先不加上加值
 					// 执行了一次
+					expr := fmt.Sprintf("d20%s", m)
 					r := mctx.Eval(expr, nil)
 					// 执行出错就丢出去
 					if r.vm.Error != nil {
 						ReplyToSender(mctx, msg, "无法解析表达式: "+restText)
 						return CmdExecuteResult{Matched: true, Solved: true}
 					}
+					// d20结果
+					d20Result, _ := r.ReadInt()
+					// 设置变量
+					VarSetValueInt64(mctx, "$t骰子出目", int64(d20Result))
+					diceDetail := r.vm.GetDetailText()
+					// 非常非常非常变态，神秘的 diceScript 能够做到同一份代码，运行出不同的结果。如果 diceScript 什么时候行为统一了可以删掉这个 if
+					if diceDetail == "" || diceDetail == strconv.Itoa(int(d20Result)) {
+						diceDetail = fmt.Sprintf("%d[d20]", d20Result)
+					}
+					// 新的表达式，加上加值 etc.
+					expr = restText
+					r2 := mctx.Eval(expr, nil)
+					// 执行出错就再丢出去
+					if r2.vm.Error != nil {
+						ReplyToSender(mctx, msg, "无法解析表达式: "+restText)
+						return CmdExecuteResult{Matched: true, Solved: true}
+					}
 					// 拿到执行的结果
-					reason := r.vm.RestInput
+					reason := r2.vm.RestInput
 					if reason == "" {
 						reason = restText
 					}
-					detail := r.vm.GetDetailText()
+					modifier, ok := r2.ReadInt()
+					if !ok {
+						ReplyToSender(mctx, msg, "无法解析表达式: "+restText)
+						return CmdExecuteResult{Matched: true, Solved: true}
+					}
+					// 这里只能手动格式化，为了保证不丢信息
+					detail := fmt.Sprintf("%s + %s", diceDetail, r2.vm.GetDetailText())
 					// Pinenutn/bugtower100：猜测这里只是格式化的部分，所以如果做多次检定，这个变量保存最后一次就够了
-					VarSetValueStr(ctx, "$t技能", reason)
-					VarSetValueStr(ctx, "$t检定过程文本", detail)
-					VarSetValueStr(ctx, "$t检定结果", r.ToString())
+					VarSetValueStr(mctx, "$t技能", reason)
+					VarSetValueStr(mctx, "$t检定过程文本", detail)
+					VarSetValueInt64(mctx, "$t检定结果", int64(d20Result+modifier))
 					// 添加对应结果文本，若只执行一次，则使用DND检定，否则使用单项文本初始化
 					if round == 1 {
-						textList = append(textList, DiceFormatTmpl(ctx, "DND:检定"))
+						textList = append(textList, DiceFormatTmpl(mctx, "DND:检定"))
 					} else {
-						textList = append(textList, DiceFormatTmpl(ctx, "DND:检定_单项结果文本"))
+						textList = append(textList, DiceFormatTmpl(mctx, "DND:检定_单项结果文本"))
 					}
 					// 添加对应commandItems
 					commandItems = append(commandItems, map[string]interface{}{
 						"expr":   expr,
 						"reason": reason,
-						"result": r.Value,
+						"result": d20Result + modifier,
 					})
 				}
 				// 拼接文本
 				// 由于循环内保留了最后一次的部分技能文本，所以这里不需要再初始化一次技能
 				var text string
 				if round > 1 {
-					VarSetValueStr(ctx, "$t结果文本", strings.Join(textList, "\n"))
-					VarSetValueStr(ctx, "$t次数", strconv.Itoa(cmdArgs.SpecialExecuteTimes))
-					text = DiceFormatTmpl(ctx, "DND:检定_多轮")
+					VarSetValueStr(mctx, "$t结果文本", strings.Join(textList, "\n"))
+					VarSetValueStr(mctx, "$t次数", strconv.Itoa(cmdArgs.SpecialExecuteTimes))
+					text = DiceFormatTmpl(mctx, "DND:检定_多轮")
 				} else {
 					// 是单轮检定，不需要组装成多轮的描述
 					text = textList[0]
@@ -531,11 +540,11 @@ func RegisterBuiltinExtDnd5e(self *Dice) {
 					}
 					if ctx.Group != nil {
 						if ctx.IsPrivate {
-							ReplyToSender(ctx, msg, DiceFormatTmpl(ctx, "核心:提示_私聊不可用"))
+							ReplyToSender(ctx, msg, DiceFormatTmpl(mctx, "核心:提示_私聊不可用"))
 						} else {
 							ctx.CommandHideFlag = ctx.Group.GroupID
-							prefix := DiceFormatTmpl(ctx, "核心:暗骰_私聊_前缀")
-							ReplyGroup(ctx, msg, DiceFormatTmpl(ctx, "核心:暗骰_群内"))
+							prefix := DiceFormatTmpl(mctx, "核心:暗骰_私聊_前缀")
+							ReplyGroup(ctx, msg, DiceFormatTmpl(mctx, "核心:暗骰_群内"))
 							ReplyPerson(ctx, msg, prefix+text)
 						}
 					} else {
@@ -1444,6 +1453,10 @@ func RegisterBuiltinExtDnd5e(self *Dice) {
 				ReplyToSender(ctx, msg, DiceFormatTmpl(ctx, "DND:先攻_下一回合"))
 			case "del", "rm":
 				tryDeleteMembersInInitList := func(deleteNames []string, riList RIList) (newList RIList, textOut strings.Builder, ok bool) {
+					if len(riList) == 0 {
+						textOut.WriteString("- 没有找到任何单位[先攻列表为空]\n")
+						return riList, textOut, false
+					}
 					round, _ := VarGetValueInt64(ctx, "$g回合数")
 					round %= int64(len(riList))
 					toDeleted := map[string]bool{}

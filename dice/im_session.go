@@ -13,6 +13,7 @@ import (
 
 	"github.com/samber/lo"
 
+	"sealdice-core/dice/events"
 	"sealdice-core/dice/service"
 	"sealdice-core/message"
 	"sealdice-core/model"
@@ -51,24 +52,8 @@ type Message struct {
 	Platform    string      `json:"platform" jsbind:"platform"` // 当前平台
 	GroupName   string      `json:"groupName"`
 	TmpUID      string      `json:"-" yaml:"-"`
-	// Note(Szzrain): 这里是消息段，为了支持多种消息类型，目前只有 LagrangeGo 支持，其他平台也应该尽快迁移支持，并使用 Session.ExecuteNew 方法
+	// Note(Szzrain): 这里是消息段，为了支持多种消息类型，目前只有 Milky 支持，其他平台也应该尽快迁移支持，并使用 Session.ExecuteNew 方法
 	Segment []message.IMessageElement `json:"-" yaml:"-" jsbind:"segment"`
-}
-
-// GroupPlayerInfoBase 群内玩家信息
-type GroupPlayerInfoBase struct {
-	Name                string `yaml:"name" jsbind:"name"` // 玩家昵称
-	UserID              string `yaml:"userId" jsbind:"userId"`
-	InGroup             bool   `yaml:"inGroup"`                                          // 是否在群内，有时一个人走了，信息还暂时残留
-	LastCommandTime     int64  `yaml:"lastCommandTime" jsbind:"lastCommandTime"`         // 上次发送指令时间
-	AutoSetNameTemplate string `yaml:"autoSetNameTemplate" jsbind:"autoSetNameTemplate"` // 名片模板
-
-	DiceSideNum  int    `yaml:"diceSideNum"`  // 面数，为0时等同于d100
-	DiceSideExpr string `yaml:"diceSideExpr"` // 面数，准备替代数字版本
-
-	TempValueAlias *map[string][]string `yaml:"-"` // 群内临时变量别名 - 其实这个有点怪的，为什么在这里？
-
-	UpdatedAtTime int64 `yaml:"-" json:"-"`
 }
 
 // GroupPlayerInfo 这是一个YamlWrapper，没有实际作用
@@ -367,15 +352,24 @@ func (ep *EndPointInfo) UnmarshalYAML(value *yaml.Node) error {
 				return err
 			}
 			ep.Adapter = val.Adapter
-			// case "LagrangeGo":
-			//	var val struct {
-			//		Adapter *PlatformAdapterLagrangeGo `yaml:"adapter"`
-			//	}
-			//	err = value.Decode(&val)
-			//	if err != nil {
-			//		return err
-			//	}
-			//	ep.Adapter = val.Adapter
+		// case "LagrangeGo":
+		//	var val struct {
+		//		Adapter *PlatformAdapterLagrangeGo `yaml:"adapter"`
+		//	}
+		//	err = value.Decode(&val)
+		//	if err != nil {
+		//		return err
+		//	}
+		//	ep.Adapter = val.Adapter
+		case "milky":
+			var val struct {
+				Adapter *PlatformAdapterMilky `yaml:"adapter"`
+			}
+			err = value.Decode(&val)
+			if err != nil {
+				return err
+			}
+			ep.Adapter = val.Adapter
 		}
 	case "DISCORD":
 		var val struct {
@@ -1675,7 +1669,7 @@ func (s *IMSession) commandSolve(ctx *MsgContext, msg *Message, cmdArgs *CmdArgs
 
 		// Note(Szzrain): TODO: 意义不明，需要想办法干掉
 		if item.EnableExecuteTimesParse {
-			cmdArgs.RevokeExecuteTimesParse()
+			cmdArgs.RevokeExecuteTimesParse(ctx, msg)
 		}
 
 		if ctx.Player != nil {
@@ -1845,6 +1839,29 @@ func (s *IMSession) OnMessageSend(ctx *MsgContext, msg *Message, flag string) {
 	}
 }
 
+func (s *IMSession) OnPoke(ctx *MsgContext, event *events.PokeEvent) {
+	if !ctx.Group.IsActive(ctx) {
+		return
+	}
+	for _, i := range ctx.Group.ActivatedExtList {
+		if i.OnPoke != nil {
+			i.callWithJsCheck(ctx.Dice, func() {
+				i.OnPoke(ctx, event)
+			})
+		}
+	}
+}
+
+func (s *IMSession) OnGroupLeave(ctx *MsgContext, event *events.GroupLeaveEvent) {
+	for _, i := range s.Parent.ExtList {
+		if i.OnGroupLeave != nil {
+			i.callWithJsCheck(ctx.Dice, func() {
+				i.OnGroupLeave(ctx, event)
+			})
+		}
+	}
+}
+
 // OnMessageEdit 消息编辑事件
 //
 // msg.Message 应为更新后的消息, msg.Time 应为更新时间而非发送时间，同时
@@ -1917,6 +1934,10 @@ func (ep *EndPointInfo) AdapterSetup() {
 			pa.EndPoint = ep
 		case "satori":
 			pa := ep.Adapter.(*PlatformAdapterSatori)
+			pa.Session = ep.Session
+			pa.EndPoint = ep
+		case "milky":
+			pa := ep.Adapter.(*PlatformAdapterMilky)
 			pa.Session = ep.Session
 			pa.EndPoint = ep
 			// case "LagrangeGo":

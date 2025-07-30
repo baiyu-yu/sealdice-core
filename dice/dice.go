@@ -1,15 +1,19 @@
 package dice
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/dop251/goja_nodejs/eventloop"
 	"github.com/dop251/goja_nodejs/require"
@@ -21,6 +25,7 @@ import (
 	rand2 "golang.org/x/exp/rand"
 	"golang.org/x/exp/slices"
 
+	"sealdice-core/dice/events"
 	"sealdice-core/dice/logger"
 	"sealdice-core/utils/dboperator/engine"
 	log "sealdice-core/utils/kratos"
@@ -96,6 +101,8 @@ type ExtInfo struct {
 	OnGroupMemberJoined func(ctx *MsgContext, msg *Message)                   `yaml:"-" json:"-" jsbind:"onGroupMemberJoined"`
 	OnGuildJoined       func(ctx *MsgContext, msg *Message)                   `yaml:"-" json:"-" jsbind:"onGuildJoined"`
 	OnBecomeFriend      func(ctx *MsgContext, msg *Message)                   `yaml:"-" json:"-" jsbind:"onBecomeFriend"`
+	OnPoke              func(ctx *MsgContext, event *events.PokeEvent)        `yaml:"-" json:"-" jsbind:"onPoke"`       // 戳一戳
+	OnGroupLeave        func(ctx *MsgContext, event *events.GroupLeaveEvent)  `yaml:"-" json:"-" jsbind:"onGroupLeave"` // 群成员被踢出
 	GetDescText         func(i *ExtInfo) string                               `yaml:"-" json:"-" jsbind:"getDescText"`
 	IsLoaded            bool                                                  `yaml:"-" json:"-" jsbind:"isLoaded"`
 	OnLoad              func()                                                `yaml:"-" json:"-" jsbind:"onLoad"`
@@ -491,31 +498,65 @@ func (d *Dice) _ExprTextV1(buffer string, ctx *MsgContext) (string, string, erro
 }
 
 // ExtFind 根据名称或别名查找扩展
-func (d *Dice) ExtFind(s string) *ExtInfo {
-	for _, i := range d.ExtList {
-		// 名字匹配，优先级最高
-		if i.Name == s {
-			return i
+func (d *Dice) ExtFind(s string, fromJS bool) *ExtInfo {
+	find := func(name string) *ExtInfo {
+		for _, i := range d.ExtList {
+			// 名字匹配，优先级最高
+			if i.Name == s {
+				return i
+			}
+		}
+		for _, i := range d.ExtList {
+			// 别名匹配，优先级次之
+			if slices.Contains(i.Aliases, s) {
+				return i
+			}
+		}
+		for _, i := range d.ExtList {
+			// 忽略大小写匹配，优先级最低
+			if strings.EqualFold(i.Name, s) || slices.Contains(i.Aliases, strings.ToLower(s)) {
+				return i
+			}
+		}
+		return nil
+	}
+	ext := find(s)
+	if ext != nil && ext.Official && fromJS {
+		// return a copy of the official extension
+		cmdMap := make(CmdMapCls, len(ext.CmdMap))
+		for s2, info := range ext.CmdMap {
+			cmdMap[s2] = &CmdItemInfo{
+				Name:                    info.Name,
+				ShortHelp:               info.ShortHelp,
+				Help:                    info.Help,
+				HelpFunc:                info.HelpFunc,
+				AllowDelegate:           info.AllowDelegate,
+				DisabledInPrivate:       info.DisabledInPrivate,
+				EnableExecuteTimesParse: info.EnableExecuteTimesParse,
+				IsJsSolveFunc:           info.IsJsSolveFunc,
+				Solve:                   info.Solve,
+				Raw:                     info.Raw,
+				CheckCurrentBotOn:       info.CheckCurrentBotOn,
+				CheckMentionOthers:      info.CheckMentionOthers,
+			}
+		}
+		return &ExtInfo{
+			Name:       ext.Name,
+			Aliases:    ext.Aliases,
+			Author:     ext.Author,
+			Version:    ext.Version,
+			AutoActive: ext.AutoActive,
+			CmdMap:     cmdMap,
+			Brief:      ext.Brief,
+			Official:   ext.Official,
 		}
 	}
-	for _, i := range d.ExtList {
-		// 别名匹配，优先级次之
-		if slices.Contains(i.Aliases, s) {
-			return i
-		}
-	}
-	for _, i := range d.ExtList {
-		// 忽略大小写匹配，优先级最低
-		if strings.EqualFold(i.Name, s) || slices.Contains(i.Aliases, strings.ToLower(s)) {
-			return i
-		}
-	}
-	return nil
+	return ext
 }
 
 // ExtAliasToName 将扩展别名转换成主用名, 如果没有找到则返回原值
 func (d *Dice) ExtAliasToName(s string) string {
-	ext := d.ExtFind(s)
+	ext := d.ExtFind(s, false)
 	if ext != nil {
 		return ext.Name
 	}
@@ -652,8 +693,34 @@ func (d *Dice) GameSystemTemplateAdd(tmpl *GameSystemTemplate) bool {
 	return d.GameSystemTemplateAddEx(tmpl, false)
 }
 
-// var randSource = rand2.NewSource(uint64(time.Now().Unix()))
-var randSource = &rand2.PCGSource{}
+// generateRandSeed 生成一个随机种子，由当前时间戳、对象指针、进程ID和堆栈信息组成
+func generateRandSeed() uint64 {
+	timestamp := time.Now().UnixNano()
+
+	type tempObj struct{ val int }
+	obj := tempObj{val: 42}
+	objPtr := uint64(uintptr(unsafe.Pointer(&obj)))
+
+	pid := uint64(os.Getpid())
+
+	buf := make([]byte, 1024)
+	n := runtime.Stack(buf, true)
+	stackInfo := buf[:n]
+
+	h := fnv.New64a()
+
+	_ = binary.Write(h, binary.LittleEndian, timestamp)
+
+	_ = binary.Write(h, binary.LittleEndian, objPtr)
+
+	_ = binary.Write(h, binary.LittleEndian, pid)
+
+	_, _ = h.Write(stackInfo)
+
+	return h.Sum64()
+}
+
+var randSource = rand2.NewSource(generateRandSeed()).(*rand2.PCGSource)
 
 func DiceRoll(dicePoints int) int { //nolint:revive
 	if dicePoints <= 0 {
@@ -716,9 +783,16 @@ func (d *Dice) ResetQuitInactiveCron() {
 			// 进入退出判定线的9/10开始提醒, 但是目前来看，原版退群只有一个提示，提示会被大量刷屏然后消失不见。同时并没有告知对应的群
 			// 或许也不应该告知对应的群，因为群可能被解散了，大量告知容易出问题？
 			// hint := thr.Add(d.Config.QuitInactiveThreshold / 10)
-			d.ImSession.LongTimeQuitInactiveGroupReborn(thr, int(d.Config.QuitInactiveBatchSize))
+			// Threshold > 0 时才应当进行退群，不然改了设置之后会疯狂退群
+			if d.Config.QuitInactiveThreshold > 0 {
+				d.ImSession.LongTimeQuitInactiveGroupReborn(thr, int(d.Config.QuitInactiveBatchSize))
+			}
 		}))
 		d.Logger.Infof("退群功能已启动，每 %s 执行一次退群判定", duration.String())
+		// Cancel the task
+	} else if taskId != 0 {
+		dm.Cron.Remove(taskId)
+		taskId = 0
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/sjson"
 	"gopkg.in/yaml.v3"
 
+	"sealdice-core/dice/events"
 	"sealdice-core/message"
 	log "sealdice-core/utils/kratos"
 	"sealdice-core/utils/procs"
@@ -963,36 +964,11 @@ func (pa *PlatformAdapterGocq) Serve() int {
 		if msgQQ.PostType == "notice" && msgQQ.NoticeType == "group_decrease" && msgQQ.SubType == "kick_me" {
 			// 被踢
 			//  {"group_id":111,"notice_type":"group_decrease","operator_id":222,"post_type":"notice","self_id":333,"sub_type":"kick_me","time":1646689414 ,"user_id":333}
-			if string(msgQQ.UserID) == string(msgQQ.SelfID) {
-				opUID := FormatDiceIDQQ(string(msgQQ.OperatorID))
-				groupName := dm.TryGetGroupName(msg.GroupID)
-				userName := dm.TryGetUserName(opUID)
-
-				skip := false
-				skipReason := ""
-				banInfo, ok := ctx.Dice.Config.BanList.GetByID(opUID)
-				if ok {
-					if banInfo.Rank == 30 {
-						skip = true
-						skipReason = "信任用户"
-					}
-				}
-				if ctx.Dice.IsMaster(opUID) {
-					skip = true
-					skipReason = "Master"
-				}
-
-				var extra string
-				if skip {
-					extra = fmt.Sprintf("\n取消处罚，原因为%s", skipReason)
-				} else {
-					ctx.Dice.Config.BanList.AddScoreByGroupKicked(opUID, msg.GroupID, ctx)
-				}
-
-				txt := fmt.Sprintf("被踢出群: 在QQ群组<%s>(%s)中被踢出，操作者:<%s>(%s)%s", groupName, msgQQ.GroupID, userName, msgQQ.OperatorID, extra)
-				log.Info(txt)
-				ctx.Notice(txt)
-			}
+			session.OnGroupLeave(ctx, &events.GroupLeaveEvent{
+				GroupID:    FormatDiceIDQQGroup(string(msgQQ.GroupID)),
+				UserID:     FormatDiceIDQQ(string(msgQQ.UserID)),
+				OperatorID: FormatDiceIDQQ(string(msgQQ.OperatorID)),
+			})
 			return
 		}
 
@@ -1058,29 +1034,15 @@ func (pa *PlatformAdapterGocq) Serve() int {
 		// 戳一戳
 		if msgQQ.PostType == "notice" && msgQQ.SubType == "poke" {
 			// {"post_type":"notice","notice_type":"notify","time":1672489767,"self_id":2589922907,"sub_type":"poke","group_id":131687852,"user_id":303451945,"sender_id":303451945,"target_id":2589922907}
-
-			// 检查设置中是否开启
-			if !ctx.Dice.Config.QQEnablePoke {
-				return
-			}
-
 			go func() {
 				defer ErrorLogAndContinue(pa.Session.Parent)
-				ctx := pa.packTempCtx(msgQQ, msg)
-
-				if string(msgQQ.TargetID) == string(msgQQ.SelfID) {
-					// 如果在戳自己
-					text := DiceFormatTmpl(ctx, "其它:戳一戳")
-					for _, i := range ctx.SplitText(text) {
-						doSleepQQ(ctx)
-						switch msg.MessageType {
-						case "group":
-							pa.SendToGroup(ctx, msg.GroupID, strings.TrimSpace(i), "")
-						case "private":
-							pa.SendToPerson(ctx, msg.Sender.UserID, strings.TrimSpace(i), "")
-						}
-					}
-				}
+				isPrivate := msgQQ.MessageType == "private"
+				pa.Session.OnPoke(pa.packTempCtx(msgQQ, msg), &events.PokeEvent{
+					GroupID:   msg.GroupID,
+					SenderID:  FormatDiceIDQQ(string(msgQQ.UserID)),
+					TargetID:  FormatDiceIDQQ(string(msgQQ.TargetID)),
+					IsPrivate: isPrivate,
+				})
 			}()
 			return
 		}
