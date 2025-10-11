@@ -107,8 +107,8 @@ type ExtInfo struct {
 	GetDescText         func(i *ExtInfo) string                               `jsbind:"getDescText"         json:"-" yaml:"-"`
 	IsLoaded            bool                                                  `jsbind:"isLoaded"            json:"-" yaml:"-"`
 	OnLoad              func()                                                `jsbind:"onLoad"              json:"-" yaml:"-"`
-	// 文案事件 - 允许JS插件监听并修改文案
-	OnTextTemplateFormat func(ctx *MsgContext, templateKey string, originalText string) string `jsbind:"onTextTemplateFormat" json:"-" yaml:"-"`
+	OnTextTemplateFormat      func(ctx *MsgContext, templateKey string, originalText string) string `jsbind:"onTextTemplateFormat" json:"-" yaml:"-"`
+	OnTextTemplateFormatAsync func(ctx *MsgContext, templateKey string, originalText string)        `jsbind:"onTextTemplateFormatAsync" json:"-" yaml:"-"`
 }
 
 // RootConfig TODO：历史遗留问题，由于不输出DICE日志效果过差，已经抹除日志输出选项，剩余两个选项，私以为可以想办法也抹除掉。

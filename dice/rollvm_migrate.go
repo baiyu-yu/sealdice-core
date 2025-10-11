@@ -335,13 +335,22 @@ func DiceFormatTmpl(ctx *MsgContext, s string) string {
 		// 获取原始文本
 		text = ctx.Dice.TextMap[s].PickSource(randSourceDrawAndTmplSelect).(string)
 		
-		// 触发文案事件，允许JS插件修改文本
+		// 同步钩子：立即修改文本
 		for _, ext := range ctx.Dice.ExtList {
 			if ext.OnTextTemplateFormat != nil {
 				modifiedText := ext.OnTextTemplateFormat(ctx, s, text)
 				if modifiedText != "" {
 					text = modifiedText
 				}
+			}
+		}
+		
+		// 异步钩子：发送补充消息（新增）
+		for _, ext := range ctx.Dice.ExtList {
+			if ext.OnTextTemplateFormatAsync != nil {
+				go func(e *ExtInfo) {
+					e.OnTextTemplateFormatAsync(ctx, s, text)
+				}(ext)
 			}
 		}
 
