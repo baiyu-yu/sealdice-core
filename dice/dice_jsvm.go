@@ -490,6 +490,96 @@ func (d *Dice) JsInit() {
 		_ = seal.Set("format", DiceFormat)
 		_ = seal.Set("formatTmpl", DiceFormatTmpl)
 		_ = seal.Set("getCtxProxyFirst", GetCtxProxyFirst)
+		
+		// 自定义文案相关方法
+		_ = seal.Set("setTextTemplate", func(category string, key string, text string, weight uint) bool {
+			if d.TextMapRaw == nil {
+				d.TextMapRaw = make(TextTemplateWithWeightDict)
+			}
+			if _, exists := d.TextMapRaw[category]; !exists {
+				d.TextMapRaw[category] = make(TextTemplateWithWeight)
+			}
+			if _, exists := d.TextMapRaw[category][key]; !exists {
+				d.TextMapRaw[category][key] = make([]TextTemplateItem, 0)
+			}
+			
+			// 检查是否已存在相同文本，如果存在则更新权重
+			for i, item := range d.TextMapRaw[category][key] {
+				if item[0].(string) == text {
+					d.TextMapRaw[category][key][i][1] = weight
+					d.GenerateTextMap()
+					return true
+				}
+			}
+			
+			// 添加新的文本条目
+			d.TextMapRaw[category][key] = append(d.TextMapRaw[category][key], TextTemplateItem{text, weight})
+			d.GenerateTextMap()
+			return true
+		})
+		
+		_ = seal.Set("removeTextTemplate", func(category string, key string, text string) bool {
+			if _, exists := d.TextMapRaw[category]; !exists {
+				return false
+			}
+			if _, exists := d.TextMapRaw[category][key]; !exists {
+				return false
+			}
+			
+			// 查找并移除指定文本
+			for i, item := range d.TextMapRaw[category][key] {
+				if item[0].(string) == text {
+					d.TextMapRaw[category][key] = append(d.TextMapRaw[category][key][:i], d.TextMapRaw[category][key][i+1:]...)
+					// 如果移除后为空，删除整个键
+					if len(d.TextMapRaw[category][key]) == 0 {
+						delete(d.TextMapRaw[category], key)
+						// 如果分类为空，删除整个分类
+						if len(d.TextMapRaw[category]) == 0 {
+							delete(d.TextMapRaw, category)
+						}
+					}
+					d.GenerateTextMap()
+					return true
+				}
+			}
+			return false
+		})
+		
+		_ = seal.Set("clearTextTemplate", func(category string, key string) bool {
+			if _, exists := d.TextMapRaw[category]; !exists {
+				return false
+			}
+			if _, exists := d.TextMapRaw[category][key]; !exists {
+				return false
+			}
+			
+			delete(d.TextMapRaw[category], key)
+			// 如果分类为空，删除整个分类
+			if len(d.TextMapRaw[category]) == 0 {
+				delete(d.TextMapRaw, category)
+			}
+			d.GenerateTextMap()
+			return true
+		})
+		
+		_ = seal.Set("getTextTemplateKeys", func(category string) []string {
+			if _, exists := d.TextMapRaw[category]; !exists {
+				return []string{}
+			}
+			keys := make([]string, 0, len(d.TextMapRaw[category]))
+			for k := range d.TextMapRaw[category] {
+				keys = append(keys, k)
+			}
+			return keys
+		})
+		
+		_ = seal.Set("getTextTemplateCategories", func() []string {
+			categories := make([]string, 0, len(d.TextMapRaw))
+			for category := range d.TextMapRaw {
+				categories = append(categories, category)
+			}
+			return categories
+		})
 
 		// 1.2新增
 		_ = seal.Set("newMessage", func() *Message {
