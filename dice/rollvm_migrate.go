@@ -332,7 +332,16 @@ func DiceFormatTmpl(ctx *MsgContext, s string) string {
 	if a == nil {
 		text = "<%未知项-" + s + "%>"
 	} else {
+		// 获取原始文本
 		text = ctx.Dice.TextMap[s].PickSource(randSourceDrawAndTmplSelect).(string)
+		
+		// 触发文案事件，允许JS插件修改文本
+		if ctx.Dice.OnTextTemplateFormat != nil {
+			modifiedText := ctx.Dice.OnTextTemplateFormat(ctx, s, text)
+			if modifiedText != "" {
+				text = modifiedText
+			}
+		}
 
 		// 找出其兼容情况，以决定使用什么版本的引擎
 		engineVersion := ctx.Dice.getTargetVmEngineVersion(VMVersionCustomText)
