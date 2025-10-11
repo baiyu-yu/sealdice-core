@@ -336,10 +336,12 @@ func DiceFormatTmpl(ctx *MsgContext, s string) string {
 		text = ctx.Dice.TextMap[s].PickSource(randSourceDrawAndTmplSelect).(string)
 		
 		// 触发文案事件，允许JS插件修改文本
-		if ctx.Dice.OnTextTemplateFormat != nil {
-			modifiedText := ctx.Dice.OnTextTemplateFormat(ctx, s, text)
-			if modifiedText != "" {
-				text = modifiedText
+		for _, ext := range ctx.Dice.ExtList {
+			if ext.OnTextTemplateFormat != nil {
+				modifiedText := ext.OnTextTemplateFormat(ctx, s, text)
+				if modifiedText != "" {
+					text = modifiedText
+				}
 			}
 		}
 
