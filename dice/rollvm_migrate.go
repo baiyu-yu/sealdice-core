@@ -340,7 +340,25 @@ func DiceFormatTmpl(ctx *MsgContext, s string) string {
 		// 收集当前上下文变量
 		vars := collectContextVars(ctx)
 		
-		// 拦截钩子：检查是否需要拦截
+		// ===== 第一步：执行模板解析，得到最终文本 =====
+		// 找出其兼容情况，以决定使用什么版本的引擎
+		engineVersion := ctx.Dice.getTargetVmEngineVersion(VMVersionCustomText)
+		if items, exists := ctx.Dice.TextMapCompatible.Load(s); exists {
+			if info, exists := items.Load(text); exists {
+				if info.Version == "v1" {
+					engineVersion = "v1"
+				}
+			}
+		}
+
+		var finalText string
+		if engineVersion == "v2" {
+			finalText, _ = DiceFormatV2(ctx, text)
+		} else {
+			finalText, _ = DiceFormatV1(ctx, text)
+		}
+		
+		// ===== 第二步：拦截钩子 - 传入完全解析后的文本 =====
 		intercepted := false
 		for _, ext := range ctx.Dice.ExtList {
 			if ext.OnTextTemplateFormatIntercept != nil {
@@ -360,23 +378,24 @@ func DiceFormatTmpl(ctx *MsgContext, s string) string {
 							}
 							waitRun <- 1
 						}()
-						result = ext.OnTextTemplateFormatIntercept(ctx, s, text, vars)
+						// 注意：这里传入的是 finalText（已解析），而不是 text（原始模板）
+						result = ext.OnTextTemplateFormatIntercept(ctx, s, finalText, vars)
 					})
 					<-waitRun
 					if result != nil && result.Intercepted {
 						intercepted = true
 						if result.ReplacedText != "" {
-							text = result.ReplacedText
+							finalText = result.ReplacedText
 						}
 						break // 一旦被拦截就停止处理其他扩展
 					}
 				} else {
 					// Go 扩展直接调用
-					result := ext.OnTextTemplateFormatIntercept(ctx, s, text, vars)
+					result := ext.OnTextTemplateFormatIntercept(ctx, s, finalText, vars)
 					if result != nil && result.Intercepted {
 						intercepted = true
 						if result.ReplacedText != "" {
-							text = result.ReplacedText
+							finalText = result.ReplacedText
 						}
 						break
 					}
@@ -386,45 +405,29 @@ func DiceFormatTmpl(ctx *MsgContext, s string) string {
 		
 		// 如果被拦截，直接返回（不执行后续的同步和异步钩子）
 		if intercepted {
-			return text
+			return finalText
 		}
 		
-		// 同步钩子：立即修改文本
+		// ===== 第三步：同步钩子 - 立即修改文本 =====
 		for _, ext := range ctx.Dice.ExtList {
 			if ext.OnTextTemplateFormat != nil {
-				modifiedText := ext.OnTextTemplateFormat(ctx, s, text)
+				modifiedText := ext.OnTextTemplateFormat(ctx, s, finalText)
 				if modifiedText != "" {
-					text = modifiedText
+					finalText = modifiedText
 				}
 			}
 		}
 		
-		// 异步钩子：发送补充消息（新增）
+		// ===== 第四步：异步钩子 - 发送补充消息 =====
 		for _, ext := range ctx.Dice.ExtList {
 			if ext.OnTextTemplateFormatAsync != nil {
 				go func(e *ExtInfo) {
-					e.OnTextTemplateFormatAsync(ctx, s, text)
+					e.OnTextTemplateFormatAsync(ctx, s, finalText)
 				}(ext)
 			}
 		}
 
-		// 找出其兼容情况，以决定使用什么版本的引擎
-		engineVersion := ctx.Dice.getTargetVmEngineVersion(VMVersionCustomText)
-		if items, exists := ctx.Dice.TextMapCompatible.Load(s); exists {
-			if info, exists := items.Load(text); exists {
-				if info.Version == "v1" {
-					engineVersion = "v1"
-				}
-			}
-		}
-
-		if engineVersion == "v2" {
-			ret, _ := DiceFormatV2(ctx, text)
-			return ret
-		} else {
-			ret, _ := DiceFormatV1(ctx, text)
-			return ret
-		}
+		return finalText
 	}
 
 	return text
