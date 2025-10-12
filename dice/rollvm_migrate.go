@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dop251/goja"
 	"github.com/samber/lo"
 	ds "github.com/sealdice/dicescript"
 
@@ -1243,20 +1244,19 @@ func collectContextVars(ctx *MsgContext) map[string]interface{} {
 	// 收集 VM 中的本地变量（主要是 $t 开头的临时变量）
 	if ctx.vm != nil {
 		ctx.vm.Attrs.Range(func(key string, value *ds.VMValue) bool {
-			// 将 VMValue 转换为 Go 原生类型
-			switch value.TypeId {
-			case ds.VMTypeInt:
-				vars[key] = int64(value.MustReadInt())
-			case ds.VMTypeFloat:
-				vars[key] = value.MustReadFloat()
-			case ds.VMTypeString:
-				vars[key] = value.MustReadString()
-			case ds.VMTypeBool:
-				vars[key] = value.MustReadBool()
-			default:
-				// 对于复杂类型，转换为字符串
-				vars[key] = value.ToString()
-			}
+				// 将 VMValue 转换为 Go 原生类型
+				switch value.TypeId {
+				case ds.VMTypeInt:
+					vars[key] = int64(value.MustReadInt())
+				case ds.VMTypeFloat:
+					vars[key] = value.MustReadFloat()
+				case ds.VMTypeString:
+					// 对于字符串类型，直接使用 ToString
+					vars[key] = value.ToString()
+				default:
+					// 对于复杂类型或未知类型，转换为字符串
+					vars[key] = value.ToString()
+				}
 			return true
 		})
 	}
@@ -1270,9 +1270,7 @@ func collectContextVars(ctx *MsgContext) map[string]interface{} {
 			case ds.VMTypeFloat:
 				vars[key] = value.MustReadFloat()
 			case ds.VMTypeString:
-				vars[key] = value.MustReadString()
-			case ds.VMTypeBool:
-				vars[key] = value.MustReadBool()
+				vars[key] = value.ToString()
 			default:
 				vars[key] = value.ToString()
 			}
