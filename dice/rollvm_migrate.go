@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -334,6 +335,58 @@ func DiceFormatTmpl(ctx *MsgContext, s string) string {
 	} else {
 		// 获取原始文本
 		text = ctx.Dice.TextMap[s].PickSource(randSourceDrawAndTmplSelect).(string)
+		
+		// 收集当前上下文变量
+		vars := collectContextVars(ctx)
+		
+		// 拦截钩子：检查是否需要拦截
+		intercepted := false
+		for _, ext := range ctx.Dice.ExtList {
+			if ext.OnTextTemplateFormatIntercept != nil {
+				if ext.IsJsExt {
+					// JS 扩展需要同步执行
+					loop, err := ctx.Dice.ExtLoopManager.GetLoop(ext.JSLoopVersion)
+					if err != nil {
+						ctx.Dice.Logger.Errorf("扩展<%s>运行环境已经过期: %v", ext.Name, err)
+						continue
+					}
+					waitRun := make(chan int, 1)
+					var result *TextInterceptResult
+					loop.RunOnLoop(func(runtime *goja.Runtime) {
+						defer func() {
+							if r := recover(); r != nil {
+								ctx.Dice.Logger.Errorf("扩展<%s>处理文本拦截异常: %v 堆栈: %v", ext.Name, r, string(debug.Stack()))
+							}
+							waitRun <- 1
+						}()
+						result = ext.OnTextTemplateFormatIntercept(ctx, s, text, vars)
+					})
+					<-waitRun
+					if result != nil && result.Intercepted {
+						intercepted = true
+						if result.ReplacedText != "" {
+							text = result.ReplacedText
+						}
+						break // 一旦被拦截就停止处理其他扩展
+					}
+				} else {
+					// Go 扩展直接调用
+					result := ext.OnTextTemplateFormatIntercept(ctx, s, text, vars)
+					if result != nil && result.Intercepted {
+						intercepted = true
+						if result.ReplacedText != "" {
+							text = result.ReplacedText
+						}
+						break
+					}
+				}
+			}
+		}
+		
+		// 如果被拦截，直接返回（不执行后续的同步和异步钩子）
+		if intercepted {
+			return text
+		}
 		
 		// 同步钩子：立即修改文本
 		for _, ext := range ctx.Dice.ExtList {
@@ -1178,4 +1231,54 @@ var _textMapBuiltin = map[string]*ds.VMValue{
 	"$t群号":     ds.NewStrVal("UI-Group:2001"),
 	"$t群号_RAW": ds.NewStrVal("2001"),
 	"$t群名":     ds.NewStrVal("豹群"),
+}
+
+// collectContextVars 收集当前上下文中的所有变量
+func collectContextVars(ctx *MsgContext) map[string]interface{} {
+	vars := make(map[string]interface{})
+	
+	// 确保 VM 已创建
+	ctx.CreateVmIfNotExists()
+	
+	// 收集 VM 中的本地变量（主要是 $t 开头的临时变量）
+	if ctx.vm != nil {
+		ctx.vm.Attrs.Range(func(key string, value *ds.VMValue) bool {
+			// 将 VMValue 转换为 Go 原生类型
+			switch value.TypeId {
+			case ds.VMTypeInt:
+				vars[key] = int64(value.MustReadInt())
+			case ds.VMTypeFloat:
+				vars[key] = value.MustReadFloat()
+			case ds.VMTypeString:
+				vars[key] = value.MustReadString()
+			case ds.VMTypeBool:
+				vars[key] = value.MustReadBool()
+			default:
+				// 对于复杂类型，转换为字符串
+				vars[key] = value.ToString()
+			}
+			return true
+		})
+	}
+	
+	// 收集玩家临时变量
+	if ctx.Player != nil && ctx.Player.ValueMapTemp != nil {
+		ctx.Player.ValueMapTemp.Range(func(key string, value *ds.VMValue) bool {
+			switch value.TypeId {
+			case ds.VMTypeInt:
+				vars[key] = int64(value.MustReadInt())
+			case ds.VMTypeFloat:
+				vars[key] = value.MustReadFloat()
+			case ds.VMTypeString:
+				vars[key] = value.MustReadString()
+			case ds.VMTypeBool:
+				vars[key] = value.MustReadBool()
+			default:
+				vars[key] = value.ToString()
+			}
+			return true
+		})
+	}
+	
+	return vars
 }

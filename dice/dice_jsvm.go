@@ -494,6 +494,15 @@ func (d *Dice) JsInit() {
 		_ = seal.Set("formatTmpl", DiceFormatTmpl)
 		_ = seal.Set("getCtxProxyFirst", GetCtxProxyFirst)
 		
+		// 文本拦截相关 API
+		_ = seal.Set("newTextInterceptResult", func(intercepted bool, replacedText string) *TextInterceptResult {
+			return &TextInterceptResult{
+				Intercepted:  intercepted,
+				ReplacedText: replacedText,
+			}
+		})
+		_ = seal.Set("collectContextVars", collectContextVars)
+		
 		// 1.2新增
 		_ = seal.Set("newMessage", func() *Message {
 			return &Message{}

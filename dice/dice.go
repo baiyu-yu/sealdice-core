@@ -109,6 +109,14 @@ type ExtInfo struct {
 	OnLoad              func()                                                `jsbind:"onLoad"              json:"-" yaml:"-"`
 	OnTextTemplateFormat      func(ctx *MsgContext, templateKey string, originalText string) string `jsbind:"onTextTemplateFormat" json:"-" yaml:"-"`
 	OnTextTemplateFormatAsync func(ctx *MsgContext, templateKey string, originalText string)        `jsbind:"onTextTemplateFormatAsync" json:"-" yaml:"-"`
+	OnTextTemplateFormatIntercept func(ctx *MsgContext, templateKey string, originalText string, vars map[string]interface{}) *TextInterceptResult `jsbind:"onTextTemplateFormatIntercept" json:"-" yaml:"-"`
+}
+
+// TextInterceptResult 文本拦截结果
+type TextInterceptResult struct {
+	Intercepted  bool   `jsbind:"intercepted"`  // 是否拦截
+	ReplacedText string `jsbind:"replacedText"` // 替换的文本（如果为空则使用原文本）
+	SkipOriginal bool   `jsbind:"skipOriginal"` // 是否跳过发送原文本
 }
 
 // RootConfig TODO：历史遗留问题，由于不输出DICE日志效果过差，已经抹除日志输出选项，剩余两个选项，私以为可以想办法也抹除掉。
