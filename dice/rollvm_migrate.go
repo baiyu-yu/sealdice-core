@@ -328,109 +328,89 @@ func DiceFormat(ctx *MsgContext, s string) string {
 	}
 }
 
-func DiceFormatTmpl(ctx *MsgContext, s string) string {
+// 返回(最终文本, 是否被拦截)
+func DiceFormatTmpl(ctx *MsgContext, s string) (string, bool) {
 	var text string
 	a := ctx.Dice.TextMap[s]
-	if a == nil {
-		text = "<%未知项-" + s + "%>"
-	} else {
-		// 获取原始文本
-		text = ctx.Dice.TextMap[s].PickSource(randSourceDrawAndTmplSelect).(string)
-		
-		// 收集当前上下文变量
-		vars := collectContextVars(ctx)
-		
-		// ===== 第一步：执行模板解析，得到最终文本 =====
-		// 找出其兼容情况，以决定使用什么版本的引擎
-		engineVersion := ctx.Dice.getTargetVmEngineVersion(VMVersionCustomText)
-		if items, exists := ctx.Dice.TextMapCompatible.Load(s); exists {
-			if info, exists := items.Load(text); exists {
-				if info.Version == "v1" {
-					engineVersion = "v1"
-				}
-			}
-		}
-
-		var finalText string
-		if engineVersion == "v2" {
-			finalText, _ = DiceFormatV2(ctx, text)
-		} else {
-			finalText, _ = DiceFormatV1(ctx, text)
-		}
-		
-		// ===== 第二步：拦截钩子 - 传入完全解析后的文本 =====
-		intercepted := false
-		for _, ext := range ctx.Dice.ExtList {
-			if ext.OnTextTemplateFormatIntercept != nil {
-				if ext.IsJsExt {
-					// JS 扩展需要同步执行
-					loop, err := ctx.Dice.ExtLoopManager.GetLoop(ext.JSLoopVersion)
-					if err != nil {
-						ctx.Dice.Logger.Errorf("扩展<%s>运行环境已经过期: %v", ext.Name, err)
-						continue
-					}
-					waitRun := make(chan int, 1)
-					var result *TextInterceptResult
-					loop.RunOnLoop(func(runtime *goja.Runtime) {
-						defer func() {
-							if r := recover(); r != nil {
-								ctx.Dice.Logger.Errorf("扩展<%s>处理文本拦截异常: %v 堆栈: %v", ext.Name, r, string(debug.Stack()))
-							}
-							waitRun <- 1
-						}()
-						// 注意：这里传入的是 finalText（已解析），而不是 text（原始模板）
-						result = ext.OnTextTemplateFormatIntercept(ctx, s, finalText, vars)
-					})
-					<-waitRun
-					if result != nil && result.Intercepted {
-						intercepted = true
-						if result.ReplacedText != "" {
-							finalText = result.ReplacedText
-						}
-						break // 一旦被拦截就停止处理其他扩展
-					}
-				} else {
-					// Go 扩展直接调用
-					result := ext.OnTextTemplateFormatIntercept(ctx, s, finalText, vars)
-					if result != nil && result.Intercepted {
-						intercepted = true
-						if result.ReplacedText != "" {
-							finalText = result.ReplacedText
-						}
-						break
-					}
-				}
-			}
-		}
-		
-		// 如果被拦截，直接返回（不执行后续的同步和异步钩子）
-		if intercepted {
-			return finalText
-		}
-		
-		// ===== 第三步：同步钩子 - 立即修改文本 =====
-		for _, ext := range ctx.Dice.ExtList {
-			if ext.OnTextTemplateFormat != nil {
-				modifiedText := ext.OnTextTemplateFormat(ctx, s, finalText)
-				if modifiedText != "" {
-					finalText = modifiedText
-				}
-			}
-		}
-		
-		// ===== 第四步：异步钩子 - 发送补充消息 =====
-		for _, ext := range ctx.Dice.ExtList {
-			if ext.OnTextTemplateFormatAsync != nil {
-				go func(e *ExtInfo) {
-					e.OnTextTemplateFormatAsync(ctx, s, finalText)
-				}(ext)
-			}
-		}
-
-		return finalText
-	}
-
-	return text
+	   if a == nil {
+		   return "<%未知项-" + s + "%>", false
+	   } else {
+		   text = ctx.Dice.TextMap[s].PickSource(randSourceDrawAndTmplSelect).(string)
+		   vars := collectContextVars(ctx)
+		   engineVersion := ctx.Dice.getTargetVmEngineVersion(VMVersionCustomText)
+		   if items, exists := ctx.Dice.TextMapCompatible.Load(s); exists {
+			   if info, exists := items.Load(text); exists {
+				   if info.Version == "v1" {
+					   engineVersion = "v1"
+				   }
+			   }
+		   }
+		   var finalText string
+		   if engineVersion == "v2" {
+			   finalText, _ = DiceFormatV2(ctx, text)
+		   } else {
+			   finalText, _ = DiceFormatV1(ctx, text)
+		   }
+		   intercepted := false
+		   for _, ext := range ctx.Dice.ExtList {
+			   if ext.OnTextTemplateFormatIntercept != nil {
+				   if ext.IsJsExt {
+					   loop, err := ctx.Dice.ExtLoopManager.GetLoop(ext.JSLoopVersion)
+					   if err != nil {
+						   ctx.Dice.Logger.Errorf("扩展<%s>运行环境已经过期: %v", ext.Name, err)
+						   continue
+					   }
+					   waitRun := make(chan int, 1)
+					   var result *TextInterceptResult
+					   loop.RunOnLoop(func(runtime *goja.Runtime) {
+						   defer func() {
+							   if r := recover(); r != nil {
+								   ctx.Dice.Logger.Errorf("扩展<%s>处理文本拦截异常: %v 堆栈: %v", ext.Name, r, string(debug.Stack()))
+							   }
+							   waitRun <- 1
+						   }()
+						   result = ext.OnTextTemplateFormatIntercept(ctx, s, finalText, vars)
+					   })
+					   <-waitRun
+					   if result != nil && result.Intercepted {
+						   intercepted = true
+						   if result.ReplacedText != "" {
+							   finalText = result.ReplacedText
+						   }
+						   break
+					   }
+				   } else {
+					   result := ext.OnTextTemplateFormatIntercept(ctx, s, finalText, vars)
+					   if result != nil && result.Intercepted {
+						   intercepted = true
+						   if result.ReplacedText != "" {
+							   finalText = result.ReplacedText
+						   }
+						   break
+					   }
+				   }
+			   }
+		   }
+		   if intercepted {
+			   return finalText, true
+		   }
+		   for _, ext := range ctx.Dice.ExtList {
+			   if ext.OnTextTemplateFormat != nil {
+				   modifiedText := ext.OnTextTemplateFormat(ctx, s, finalText)
+				   if modifiedText != "" {
+					   finalText = modifiedText
+				   }
+			   }
+		   }
+		   for _, ext := range ctx.Dice.ExtList {
+			   if ext.OnTextTemplateFormatAsync != nil {
+				   go func(e *ExtInfo) {
+					   e.OnTextTemplateFormatAsync(ctx, s, finalText)
+				   }(ext)
+			   }
+		   }
+		   return finalText, false
+	   }
 }
 
 func (ctx *MsgContext) Eval(expr string, flags *ds.RollConfig) *VMResultV2 {
