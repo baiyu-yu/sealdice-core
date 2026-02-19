@@ -772,6 +772,9 @@ func (d *Dice) JsLoadScripts() {
 		if info.IsDir() && info.Name() == "_builtin" {
 			return fs.SkipDir
 		}
+		if info.IsDir() && strings.EqualFold(info.Name(), "webui") {
+			return fs.SkipDir
+		}
 		if isScriptFile(path) {
 			d.Logger.Info("正在读取脚本: ", path)
 			data, err := os.ReadFile(path)
@@ -1199,7 +1202,9 @@ func JsDelete(d *Dice, jsInfo *JsScriptInfo) {
 	dirpath := filepath.Dir(jsInfo.Filename)
 	dirname := filepath.Base(dirpath)
 
-	if strings.HasPrefix(dirname, "_") && strings.HasSuffix(dirname, ".deck") {
+	lowerDirName := strings.ToLower(dirname)
+	if strings.HasPrefix(dirname, "_") &&
+		(strings.HasSuffix(lowerDirName, ".deck") || strings.HasSuffix(lowerDirName, ".zip")) {
 		// 可能是zip解压出来的，那么删除目录和压缩包
 		_ = os.RemoveAll(dirpath)
 		zipFilename := filepath.Join(filepath.Dir(dirpath), dirname[1:])

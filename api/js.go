@@ -1,11 +1,15 @@
 package api
 
 import (
+	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -179,11 +183,11 @@ func jsUpload(c echo.Context) error {
 		_ = src.Close()
 	}(src)
 
-	// Destination
-	// fmt.Println("????", filepath.Join("./data/decks", file.Filename))
-	file.Filename = strings.ReplaceAll(file.Filename, "/", "_")
-	file.Filename = strings.ReplaceAll(file.Filename, "\\", "_")
-	dst, err := os.Create(filepath.Join(myDice.BaseConfig.DataDir, "scripts", file.Filename))
+	fileName := sanitizeUploadedFilename(file.Filename)
+	scriptsDir := filepath.Join(myDice.BaseConfig.DataDir, "scripts")
+	dstPath := filepath.Join(scriptsDir, fileName)
+
+	dst, err := os.Create(dstPath)
 	if err != nil {
 		return err
 	}
@@ -196,7 +200,185 @@ func jsUpload(c echo.Context) error {
 		return err
 	}
 
+	if strings.EqualFold(filepath.Ext(fileName), ".zip") {
+		destDir := filepath.Join(scriptsDir, "_"+fileName)
+		if err = extractJSPluginPackage(dstPath, destDir); err != nil {
+			_ = os.RemoveAll(destDir)
+			_ = os.Remove(dstPath)
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+	}
+
 	return c.JSON(http.StatusOK, nil)
+}
+
+func sanitizeUploadedFilename(filename string) string {
+	filename = strings.TrimSpace(filename)
+	filename = strings.ReplaceAll(filename, "/", "_")
+	filename = strings.ReplaceAll(filename, "\\", "_")
+	return filepath.Base(filename)
+}
+
+func normalizeZipEntryName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = strings.TrimPrefix(name, "/")
+	name = strings.TrimPrefix(name, "./")
+	name = path.Clean("/" + name)
+	name = strings.TrimPrefix(name, "/")
+	if name == "" || name == "." {
+		return "", nil
+	}
+	parts := strings.Split(name, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "", errors.New("zip entry contains invalid path")
+		}
+	}
+	return name, nil
+}
+
+func openZipEntryToFile(file *zip.File, target string) error {
+	src, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer func(src io.ReadCloser) {
+		_ = src.Close()
+	}(src)
+
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	perm := file.Mode()
+	if perm == 0 {
+		perm = 0o644
+	}
+	dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	defer func(dst *os.File) {
+		_ = dst.Close()
+	}(dst)
+	_, err = io.Copy(dst, src)
+	return err
+}
+
+func isWebUIUnderPath(filePath string, root string) bool {
+	absFile, err := filepath.Abs(filePath)
+	if err != nil {
+		return false
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	absRoot = filepath.Clean(absRoot)
+	if !strings.HasSuffix(absRoot, string(os.PathSeparator)) {
+		absRoot += string(os.PathSeparator)
+	}
+	return strings.HasPrefix(absFile, absRoot)
+}
+
+func extractJSPluginPackage(zipPath string, destDir string) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer func(reader *zip.ReadCloser) {
+		_ = reader.Close()
+	}(reader)
+
+	type webuiEntry struct {
+		file *zip.File
+		rel  string
+	}
+
+	var scriptFiles []*zip.File
+	var webuiFiles []webuiEntry
+
+	for _, file := range reader.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+		name, err := normalizeZipEntryName(file.Name)
+		if err != nil {
+			return err
+		}
+		if name == "" {
+			continue
+		}
+
+		parts := strings.Split(name, "/")
+		webuiIndex := -1
+		for idx, part := range parts {
+			if strings.EqualFold(part, "webui") {
+				webuiIndex = idx
+				break
+			}
+		}
+		if webuiIndex >= 0 {
+			rel := path.Join(parts[webuiIndex+1:]...)
+			if rel != "." && rel != "" {
+				webuiFiles = append(webuiFiles, webuiEntry{
+					file: file,
+					rel:  rel,
+				})
+			}
+			continue
+		}
+
+		if isPluginScriptFile(name) {
+			scriptFiles = append(scriptFiles, file)
+		}
+	}
+
+	if len(scriptFiles) == 0 {
+		return errors.New("zip包中未找到插件脚本(.js/.ts)")
+	}
+	if len(scriptFiles) > 1 {
+		return errors.New("zip包中存在多个插件脚本，仅支持一个入口文件")
+	}
+	if len(webuiFiles) == 0 {
+		return errors.New("zip包中未找到webui目录")
+	}
+
+	_ = os.RemoveAll(destDir)
+	if err = os.MkdirAll(destDir, 0o755); err != nil {
+		return err
+	}
+
+	scriptFile := scriptFiles[0]
+	scriptName := sanitizeUploadedFilename(filepath.Base(scriptFile.Name))
+	if scriptName == "" || !isPluginScriptFile(scriptName) {
+		return errors.New("zip包中的脚本文件名无效")
+	}
+	scriptTarget := filepath.Join(destDir, scriptName)
+	if err = openZipEntryToFile(scriptFile, scriptTarget); err != nil {
+		return err
+	}
+
+	webuiRoot := filepath.Join(destDir, "webui")
+	for _, item := range webuiFiles {
+		target := filepath.Join(webuiRoot, filepath.FromSlash(item.rel))
+		if !isWebUIUnderPath(target, webuiRoot) {
+			return errors.New("webui目录存在非法路径")
+		}
+		if err = openZipEntryToFile(item.file, target); err != nil {
+			return err
+		}
+	}
+
+	if _, err = os.Stat(filepath.Join(webuiRoot, "index.html")); errors.Is(err, fs.ErrNotExist) {
+		return errors.New("webui目录缺少index.html")
+	}
+	return err
+}
+
+func isPluginScriptFile(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	return ext == ".js" || ext == ".ts"
 }
 
 func jsList(c echo.Context) error {
@@ -210,13 +392,15 @@ func jsList(c echo.Context) error {
 
 	type script struct {
 		dice.JsScriptInfo
-		BuiltinUpdated bool `json:"builtinUpdated"`
+		BuiltinUpdated bool   `json:"builtinUpdated"`
+		WebUIPath      string `json:"webUIPath,omitempty"`
 	}
 	scripts := make([]*script, 0, len(myDice.JsScriptList))
 	for _, info := range myDice.JsScriptList {
 		temp := script{
 			JsScriptInfo:   *info,
 			BuiltinUpdated: info.Builtin && !myDice.JsBuiltinDigestSet[info.Digest],
+			WebUIPath:      getJsScriptWebUIPathByScriptInfo(info),
 		}
 		scripts = append(scripts, &temp)
 	}

@@ -408,6 +408,7 @@ func onebotTool(c echo.Context) error {
 type apiPluginConfig struct {
 	PluginName string             `json:"pluginName"`
 	Configs    []*dice.ConfigItem `jsbind:"configs"  json:"configs"`
+	WebUIPath  string             `json:"webUIPath,omitempty"`
 }
 
 type getConfigResp map[string]*apiPluginConfig
@@ -427,6 +428,7 @@ func handleGetConfigs(c echo.Context) error {
 		resp[k] = &apiPluginConfig{
 			PluginName: v.PluginName,
 			Configs:    configs,
+			WebUIPath:  getJsScriptWebUIPathByPluginName(v.PluginName),
 		}
 	}
 	data, err := json.Marshal(resp)
@@ -668,6 +670,8 @@ func Bind(e *echo.Echo, _myDice *dice.DiceManager) {
 	e.POST(prefix+"/js/set_configs", handleSetConfigs)
 	e.POST(prefix+"/js/delete_unused_configs", handleDeleteUnusedConfigs)
 	e.POST(prefix+"/js/reset_config", handleResetConfig)
+	e.GET("/webui/:plugin", jsPluginWebUI)
+	e.GET("/webui/:plugin/*", jsPluginWebUI)
 
 	e.GET(prefix+"/helpdoc/status", helpDocStatus)
 	e.GET(prefix+"/helpdoc/tree", helpDocTree)

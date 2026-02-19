@@ -621,6 +621,7 @@ func uiServe(dm *dice.DiceManager, hideUI bool, useBuiltin bool) {
 		}
 	}
 	e.Use(groupStatic)
+	api.Bind(e, dm)
 	if useBuiltin {
 		frontend, _ := fs.Sub(static.Frontend, "frontend")
 		e.StaticFS("/", frontend)
@@ -628,7 +629,6 @@ func uiServe(dm *dice.DiceManager, hideUI bool, useBuiltin bool) {
 		e.Static("/", "./frontend_overwrite")
 	}
 
-	api.Bind(e, dm)
 	e.HideBanner = true // 关闭banner，原因是banner图案会改变终端光标位置
 
 	httpServe(e, dm, hideUI)
