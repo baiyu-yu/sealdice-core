@@ -363,6 +363,24 @@ func (d *Dice) JsInit() {
 			}
 			return d.ConfigManager.getConfig(ei.Name, key)
 		})
+		_ = ext.Set("getWebUIConfig", func(ei *ExtInfo, key string) interface{} {
+			if ei.dice == nil {
+				return nil
+			}
+			return d.ConfigManager.GetPluginWebUIConfig(ei.Name, key)
+		})
+		_ = ext.Set("getWebUIConfigAll", func(ei *ExtInfo) map[string]interface{} {
+			if ei.dice == nil {
+				return map[string]interface{}{}
+			}
+			return d.ConfigManager.GetPluginWebUIConfigs(ei.Name)
+		})
+		_ = ext.Set("setWebUIConfig", func(ei *ExtInfo, key string, value interface{}) error {
+			if ei.dice == nil {
+				return errors.New("请先完成此扩展的注册")
+			}
+			return d.ConfigManager.SetPluginWebUIConfig(ei.Name, key, value)
+		})
 		_ = ext.Set("getStringConfig", func(ei *ExtInfo, key string) string {
 			if ei.dice == nil || d.ConfigManager.getConfig(ei.Name, key).Type != "string" {
 				panic("配置不存在或类型不匹配")

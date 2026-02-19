@@ -175,6 +175,7 @@ type PluginConfig struct {
 	PluginName        string                 `json:"pluginName"`
 	Configs           map[string]*ConfigItem `jsbind:"configs"           json:"configs"`
 	OrderedConfigKeys []string               `jsbind:"orderedConfigKeys" json:"orderedConfigKeys"`
+	WebUIValues       map[string]interface{} `json:"webUIValues,omitempty"`
 }
 
 type ConfigManager struct {
@@ -259,6 +260,7 @@ func (cm *ConfigManager) RegisterPluginConfig(pluginName string, configItems ...
 			PluginName:        pluginName,
 			Configs:           configs,
 			OrderedConfigKeys: orderedConfigKeys,
+			WebUIValues:       make(map[string]interface{}),
 		}
 	}
 	_ = cm.save()
@@ -323,6 +325,96 @@ func (cm *ConfigManager) SetConfig(pluginName, key string, value interface{}) er
 		plugin.Configs[key] = configItem
 		cm.Plugins[pluginName] = plugin
 	}
+	return cm.save()
+}
+
+func (cm *ConfigManager) GetPluginWebUIConfig(pluginName, key string) interface{} {
+	cm.lock.RLock()
+	defer cm.lock.RUnlock()
+
+	plugin, ok := cm.Plugins[pluginName]
+	if !ok || plugin.WebUIValues == nil {
+		return nil
+	}
+	return plugin.WebUIValues[key]
+}
+
+func (cm *ConfigManager) GetPluginWebUIConfigs(pluginName string) map[string]interface{} {
+	cm.lock.RLock()
+	defer cm.lock.RUnlock()
+
+	plugin, ok := cm.Plugins[pluginName]
+	if !ok || plugin.WebUIValues == nil {
+		return map[string]interface{}{}
+	}
+
+	buf, err := json.Marshal(plugin.WebUIValues)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+	var copied map[string]interface{}
+	if err = json.Unmarshal(buf, &copied); err != nil {
+		return map[string]interface{}{}
+	}
+	if copied == nil {
+		return map[string]interface{}{}
+	}
+	return copied
+}
+
+func (cm *ConfigManager) SetPluginWebUIConfig(pluginName, key string, value interface{}) error {
+	cm.lock.Lock()
+	defer cm.lock.Unlock()
+
+	plugin, ok := cm.Plugins[pluginName]
+	if !ok {
+		plugin = &PluginConfig{
+			PluginName:        pluginName,
+			Configs:           make(map[string]*ConfigItem),
+			OrderedConfigKeys: []string{},
+			WebUIValues:       make(map[string]interface{}),
+		}
+	}
+	if plugin.WebUIValues == nil {
+		plugin.WebUIValues = make(map[string]interface{})
+	}
+	plugin.WebUIValues[key] = value
+	cm.Plugins[pluginName] = plugin
+	return cm.save()
+}
+
+func (cm *ConfigManager) SetPluginWebUIConfigs(pluginName string, values map[string]interface{}) error {
+	cm.lock.Lock()
+	defer cm.lock.Unlock()
+
+	plugin, ok := cm.Plugins[pluginName]
+	if !ok {
+		plugin = &PluginConfig{
+			PluginName:        pluginName,
+			Configs:           make(map[string]*ConfigItem),
+			OrderedConfigKeys: []string{},
+		}
+	}
+
+	if values == nil {
+		plugin.WebUIValues = make(map[string]interface{})
+		cm.Plugins[pluginName] = plugin
+		return cm.save()
+	}
+
+	buf, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	var copied map[string]interface{}
+	if err = json.Unmarshal(buf, &copied); err != nil {
+		return err
+	}
+	if copied == nil {
+		copied = make(map[string]interface{})
+	}
+	plugin.WebUIValues = copied
+	cm.Plugins[pluginName] = plugin
 	return cm.save()
 }
 

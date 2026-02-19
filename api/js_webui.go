@@ -132,3 +132,48 @@ func jsPluginWebUI(c echo.Context) error {
 	}
 	return c.NoContent(http.StatusNotFound)
 }
+
+func jsWebUIConfigGet(c echo.Context) error {
+	if !doAuth(c) {
+		return c.JSON(http.StatusForbidden, nil)
+	}
+
+	pluginName := strings.TrimSpace(c.QueryParam("pluginName"))
+	if pluginName == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "pluginName is required")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"pluginName": pluginName,
+		"values":     myDice.ConfigManager.GetPluginWebUIConfigs(pluginName),
+	})
+}
+
+type jsWebUIConfigSetReq struct {
+	PluginName string                 `json:"pluginName"`
+	Values     map[string]interface{} `json:"values"`
+}
+
+func jsWebUIConfigSet(c echo.Context) error {
+	if !doAuth(c) {
+		return c.JSON(http.StatusForbidden, nil)
+	}
+
+	var v jsWebUIConfigSetReq
+	if err := c.Bind(&v); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Failed to parse data")
+	}
+	v.PluginName = strings.TrimSpace(v.PluginName)
+	if v.PluginName == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "pluginName is required")
+	}
+
+	if err := myDice.ConfigManager.SetPluginWebUIConfigs(v.PluginName, v.Values); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"pluginName": v.PluginName,
+		"values":     myDice.ConfigManager.GetPluginWebUIConfigs(v.PluginName),
+	})
+}

@@ -668,6 +668,8 @@ func Bind(e *echo.Echo, _myDice *dice.DiceManager) {
 	e.POST(prefix+"/js/update", jsUpdate)
 	e.GET(prefix+"/js/get_configs", handleGetConfigs)
 	e.POST(prefix+"/js/set_configs", handleSetConfigs)
+	e.GET(prefix+"/js/webui_config/get", jsWebUIConfigGet)
+	e.POST(prefix+"/js/webui_config/set", jsWebUIConfigSet)
 	e.POST(prefix+"/js/delete_unused_configs", handleDeleteUnusedConfigs)
 	e.POST(prefix+"/js/reset_config", handleResetConfig)
 	e.GET("/webui/:plugin", jsPluginWebUI)
