@@ -232,6 +232,8 @@ func (cm *ConfigManager) RegisterPluginConfig(pluginName string, configItems ...
 		for _, newItem := range configItems {
 			// if isValidType(newItem.Type) {
 			if existingItem, itemExists := existingPlugin.Configs[newItem.Key]; itemExists {
+				existingItem.Type = newItem.Type
+				existingItem.Group = newItem.Group
 				existingItem.DefaultValue = newItem.DefaultValue
 				existingItem.Option = newItem.Option
 				existingItem.Description = newItem.Description
