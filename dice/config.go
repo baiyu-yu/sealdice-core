@@ -232,13 +232,21 @@ func (cm *ConfigManager) RegisterPluginConfig(pluginName string, configItems ...
 		for _, newItem := range configItems {
 			// if isValidType(newItem.Type) {
 			if existingItem, itemExists := existingPlugin.Configs[newItem.Key]; itemExists {
-				existingItem.Type = newItem.Type
-				existingItem.Group = newItem.Group
+				typeChanged := newItem.Type != "" && existingItem.Type != newItem.Type
+				if newItem.Type != "" {
+					existingItem.Type = newItem.Type
+				}
+				if newItem.Group != "" {
+					existingItem.Group = newItem.Group
+				}
 				existingItem.DefaultValue = newItem.DefaultValue
 				existingItem.Option = newItem.Option
 				existingItem.Description = newItem.Description
 				existingItem.Deprecated = false // Reset deprecated flag
 				existingItem.task = newItem.task
+				if typeChanged {
+					existingItem.Value = newItem.DefaultValue
+				}
 				existingPlugin.Configs[newItem.Key] = existingItem
 				// Extension can reorder config by re-registering it
 				// Time complexity of removing the old position is O(1) if the order doesn't change
