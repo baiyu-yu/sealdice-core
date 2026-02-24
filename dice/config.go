@@ -67,6 +67,7 @@ type (
 type ConfigItem struct {
 	Key          string      `jsbind:"key"          json:"key"`
 	Type         string      `jsbind:"type"         json:"type"`
+	Group        string      `jsbind:"group"        json:"group,omitempty"`
 	DefaultValue interface{} `jsbind:"defaultValue" json:"defaultValue"`
 	Value        interface{} `jsbind:"value"        json:"value,omitempty"`
 	Option       interface{} `jsbind:"option"       json:"option,omitempty"`
@@ -90,6 +91,11 @@ func (i *ConfigItem) UnmarshalJSON(data []byte) error {
 	}
 	if err := json.Unmarshal(raw["description"], &i.Description); err != nil {
 		return fmt.Errorf("ConfigItem (%s): unmarshal 'description' failed as %w", i.Key, err)
+	}
+	if v, ok := raw["group"]; ok {
+		if err := json.Unmarshal(v, &i.Group); err != nil {
+			return fmt.Errorf("ConfigItem (%s): unmarshal 'group' failed as %w", i.Key, err)
+		}
 	}
 	if v, ok := raw["deprecated"]; ok {
 		if err := json.Unmarshal(v, &i.Deprecated); err != nil {

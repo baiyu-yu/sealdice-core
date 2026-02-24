@@ -357,6 +357,18 @@ func (d *Dice) JsInit() {
 			d.ConfigManager.RegisterPluginConfig(ei.Name, config...)
 			return nil
 		})
+		_ = ext.Set("registerConfigWithGroup", func(ei *ExtInfo, group string, config ...*ConfigItem) error {
+			if ei.dice == nil {
+				return errors.New("请先完成此扩展的注册")
+			}
+			for _, item := range config {
+				if item != nil {
+					item.Group = group
+				}
+			}
+			d.ConfigManager.RegisterPluginConfig(ei.Name, config...)
+			return nil
+		})
 		_ = ext.Set("getConfig", func(ei *ExtInfo, key string) *ConfigItem {
 			if ei.dice == nil {
 				return nil
